@@ -75,6 +75,15 @@ main(int argc, const char *argv[])
       print_hex(nt.nti.nai.abtAts, nt.nti.nai.szAtsLen);
     }
   }
+
+  int test = nfc_initiator_transceive_bytes(pnd,,
+		const size_t  	szTxBits,
+		const uint8_t *  	pbtTxPar,
+		uint8_t *  	pbtRx,
+		const size_t  	szRx,
+		uint8_t *  	pbtRxPar 
+	) 	;
+
   // Close NFC device
   nfc_close(pnd);
   // Release the context

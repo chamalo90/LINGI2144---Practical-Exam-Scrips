@@ -1,87 +1,151 @@
-/**
- * @file quick_start_example1.c
- * @brief Quick start example that presents how to use libnfc
+/*-
+ * Copyright (C) 2010, Romain Tartiere.
+ *
+ * This program is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Lesser General Public License as published by the
+ * Free Software Foundation, either version 3 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>
+ *
+ * $Id$
  */
 
-// To compile this simple example:
-// $ gcc -o quick_start_example1 quick_start_example1.c -lnfc
+#include "config.h"
 
+#include <err.h>
+#include <errno.h>
 #include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
 #include <nfc/nfc.h>
 
-static void
-print_hex(const uint8_t *pbtData, const size_t szBytes)
-{
-  size_t  szPos;
+#include <freefare.h>
 
-  for (szPos = 0; szPos < szBytes; szPos++) {
-    printf("%02x  ", pbtData[szPos]);
-  }
-  printf("\n");
+uint8_t null_key_data[8] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+
+struct {
+    bool interactive;
+} format_options = {
+    .interactive = true
+};
+
+void
+usage(char *progname)
+{
+    fprintf (stderr, "usage: %s [-y]\n", progname);
+    fprintf (stderr, "\nOptions:\n");
+    fprintf (stderr, "  -y     Do not ask for confirmation (dangerous)\n");
 }
 
 int
-main(int argc, const char *argv[])
+main(int argc, char *argv[])
 {
-  nfc_device *pnd;
-  nfc_target nt;
+    int ch;
+    int error = EXIT_SUCCESS;
+    nfc_device_t *device = NULL;
+    MifareTag *tags = NULL;
 
-  // Allocate only a pointer to nfc_context
-  nfc_context *context;
-
-  // Initialize libnfc and set the nfc_context
-  nfc_init(&context);
-  if (context == NULL) {
-    printf("Unable to init libnfc (malloc)\n");
-    exit(EXIT_FAILURE);
-  }
-
-  // Display libnfc version
-  const char *acLibnfcVersion = nfc_version();
-  (void)argc;
-  printf("%s uses libnfc %s\n", argv[0], acLibnfcVersion);
-
-  // Open, using the first available NFC device which can be in order of selection:
-  //   - default device specified using environment variable or
-  //   - first specified device in libnfc.conf (/etc/nfc) or
-  //   - first specified device in device-configuration directory (/etc/nfc/devices.d) or
-  //   - first auto-detected (if feature is not disabled in libnfc.conf) device
-  pnd = nfc_open(context, NULL);
-
-  if (pnd == NULL) {
-    printf("ERROR: %s\n", "Unable to open NFC device.");
-    exit(EXIT_FAILURE);
-  }
-  // Set opened NFC device to initiator mode
-  if (nfc_initiator_init(pnd) < 0) {
-    nfc_perror(pnd, "nfc_initiator_init");
-    exit(EXIT_FAILURE);
-  }
-
-  printf("NFC reader: %s opened\n", nfc_device_get_name(pnd));
-
-  // Poll for a ISO14443A (MIFARE) tag
-  const nfc_modulation nmMifare = {
-    .nmt = NMT_ISO14443A,
-    .nbr = NBR_106,
-  };
-  if (nfc_initiator_select_passive_target(pnd, nmMifare, NULL, 0, &nt) > 0) {
-    printf("The following (NFC) ISO14443A tag was found:\n");
-    printf("    ATQA (SENS_RES): ");
-    print_hex(nt.nti.nai.abtAtqa, 2);
-    printf("       UID (NFCID%c): ", (nt.nti.nai.abtUid[0] == 0x08 ? '3' : '1'));
-    print_hex(nt.nti.nai.abtUid, nt.nti.nai.szUidLen);
-    printf("      SAK (SEL_RES): ");
-    print_hex(&nt.nti.nai.btSak, 1);
-    if (nt.nti.nai.szAtsLen) {
-      printf("          ATS (ATR): ");
-      print_hex(nt.nti.nai.abtAts, nt.nti.nai.szAtsLen);
+    while ((ch = getopt (argc, argv, "hy")) != -1) {
+        switch (ch) {
+            case 'h':
+                usage(argv[0]);
+                exit (EXIT_SUCCESS);
+                break;
+            case 'y':
+                format_options.interactive = false;
+                break;
+            default:
+                usage(argv[0]);
+                exit (EXIT_FAILURE);
+        }
     }
-  }
+    argc -= optind;
+    argv += optind;
 
-  // Close NFC device
-  nfc_close(pnd);
-  // Release the context
-  nfc_exit(context);
-  exit(EXIT_SUCCESS);
-}
+    nfc_device_desc_t devices[8];
+    size_t device_count;
+
+    nfc_list_devices (devices, 8, &device_count);
+    if (!device_count)
+        errx (EXIT_FAILURE, "No NFC device found.");
+
+    for (size_t d = 0; d < device_count; d++) {
+        device = nfc_connect (&(devices[d]));
+        if (!device) {
+            warnx ("nfc_connect() failed.");
+            error = EXIT_FAILURE;
+            continue;
+        }
+
+    tags = freefare_get_tags (device);
+    if (!tags) {
+        nfc_disconnect (device);
+        errx (EXIT_FAILURE, "Error listing Mifare DESFire tags.");
+    }
+
+    for (int i = 0; (!error) && tags[i]; i++) {
+        switch (freefare_get_tag_type (tags[i])) {
+            case DESFIRE_4K:
+                break;
+            default:
+                continue;
+        }
+
+        char *tag_uid = freefare_get_tag_uid (tags[i]);
+        char buffer[BUFSIZ];
+
+        printf ("Found %s with UID %s.", freefare_get_tag_friendly_name (tags[i]), tag_uid);
+        bool format = true;
+        if (format_options.interactive) {
+            printf ("Format [yN] ");
+            fgets (buffer, BUFSIZ, stdin);
+            format = ((buffer[0] == 'y') || (buffer[0] == 'Y'));
+        } else {
+            printf ("\n");
+        }
+
+        if (format) {
+            int res;
+            MifareDESFireKey default_key = mifare_desfire_des_key_new_with_version (null_key_data);
+
+            res = mifare_desfire_connect (tags[i]);
+            if (res < 0) {
+                warnx ("Can't connect to Mifare DESFire target.");
+                error = EXIT_FAILURE;
+                break;
+            }
+
+            res = mifare_desfire_authenticate (tags[i], 0, default_key);
+            if (res < 0) {
+                warnx ("Can't authenticate on Mifare DESFire target.");
+                error = EXIT_FAILURE;
+                break;
+            }
+
+            res = mifare_desfire_format_picc (tags[i]);
+            if (res < 0) {
+                warn ("Can't format PICC.");
+                error = EXIT_FAILURE;
+                break;
+            }
+
+            mifare_desfire_disconnect (tags[i]);
+        }
+
+        free (tag_uid);
+    }
+
+    freefare_free_tags (tags);
+    nfc_disconnect (device);
+    }
+
+    exit (error);
+} /* main() */
