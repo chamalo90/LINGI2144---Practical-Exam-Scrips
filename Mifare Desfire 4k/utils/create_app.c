@@ -228,7 +228,9 @@ int main(int argc, char *argv[])
                 int i,AID;
                 unsigned int result[length];
                 for(i=0;i<length-2;){
-                  AID = (abtRx[i+2]>>16) + (abtRx[i+1]>>8) + (abtRx[i]);
+                  AID = (abtRx[i+2]*65536);
+                  AID += (abtRx[i+1]*256);
+                  AID += (abtRx[i]);
                   printf("AID : %d\n",AID);
                   result[i] = AID;
                   i= i+3;
