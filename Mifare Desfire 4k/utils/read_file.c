@@ -7,13 +7,17 @@
 
 #define MAX_FRAME_LEN 264
 #define FILE_SIZE 42
-//#define DEBUG
+#define DEBUG
 
 /*APDU Declaration*/
 
 uint8_t selectApplication_apdu[9] = {0x90,0x5A,0x00,0x00,0x03,0x00,0x00,0x00,0x00};
 uint8_t createFile_apdu[13] = {0x90,0xCD,0x00,0x00,0x07,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00};
 uint8_t deleteFile_apdu[7] = {0x90,0xDF,0x00,0x00,0x01,0x00,0x00};
+uint8_t writeFile_partial_apdu[5] = {0x90,0x3D,0x00,0x00,0x00};
+
+/* Dummy Data */
+uint8_t dummy_data[13] = {0x43, 0x6c, 0x69, 0x6e, 0x63, 0x68, 0x65, 0x20, 0x54, 0x65, 0x61, 0x6d, 0x21}; // Clinche Team!
 
 /*LibNFC global variable*/
 nfc_context *context = NULL;    /*context pointer          */
@@ -29,7 +33,7 @@ int createFile(unsigned int FID);
 int deleteFile(unsigned int FID);
 int listFile(unsigned int *outputList, int *outputCount);
 int readFile(unsigned int  FID, uint8_t *buf, int nbyte);
-int writeFile(unsigned int  FID, uint8_t *buf, int nbyte);
+int writeFile(unsigned int  FID, uint8_t *buf, int nbyte, uint8_t offset);
 int selectApp(unsigned int AID);
 void usage(char *progname);
 
@@ -49,6 +53,7 @@ int main(int argc, char *argv[])
     bool create = false;
     bool delete = false;
     bool list = false;
+    bool write = false;
 
     if(argc<2){
         usage(argv[0]);
@@ -70,6 +75,10 @@ int main(int argc, char *argv[])
             case's' :
                 AID = atoi(optarg);
                 break;
+            case 'w':
+                FID = atoi(optarg);
+                write = true;
+
         }
     }
     if(AID == 0){
@@ -90,6 +99,11 @@ int main(int argc, char *argv[])
     }else if(delete){
         if(deleteFile(FID) != 0)
         {
+            printf("Failure\n");
+            return EXIT_FAILURE;
+        }
+    }else if(write){
+        if(writeFile(FID,dummy_data,13,0) !=0){
             printf("Failure\n");
             return EXIT_FAILURE;
         }
@@ -196,10 +210,47 @@ int readFile(unsigned int  FID, uint8_t *buf, int nbyte)/**/
     return 0;
 }
 
-int writeFile(unsigned int  FID, uint8_t *buf, int nbyte)
+int writeFile(unsigned int  FID, uint8_t *buf, int nbyte, uint8_t offset)
 {
-    
+    uint8_t abtRx[MAX_FRAME_LEN]; /*output buffer         */
+    uint8_t abtTx[MAX_FRAME_LEN]; /*input buffer          */
+    size_t abtTx_size;
+
+    /*check the AID*/
+    if(FID > 0xff )/*|| FID < 0x00) the integer is unsigned, its value can not be below 0*/
+    {
+        fprintf(stderr, "Invalid FID, expected a value between 0x00 and 0xff, got 0x%06x\n",FID);
+        return -1;
+    }
+
+    /*prepare the data*/
+    abtTx_size = 5;
+    memcpy(abtTx,writeFile_partial_apdu,abtTx_size);
+    abtTx_size += 8 + nbyte;    /* 5 before input, 7 input header, nbyte date, 1 Le */
+    abtTx[4] = 7 + nbyte;         /* Lc field*/
+    abtTx[5] = FID & 0xff;         /*file descriptor*/
+    abtTx[6] = offset & 0xff;         /*file descriptor*/
+    abtTx[7] = (offset >> 8) & 0xff;         /*file descriptor*/
+    abtTx[8] = (offset >> 16) & 0xff;         /*file descriptor*/
+    abtTx[9] = nbyte & 0xff;         /*file descriptor*/
+    abtTx[10] = (nbyte >> 8) & 0xff;         /*file descriptor*/
+    abtTx[11] = (nbyte >> 16) & 0xff;         /*file descriptor*/
+    int i;
+    for(i=12;i<12+nbyte; i++){
+        abtTx[i] = buf[i-12];
+    }
+    abtTx[12+nbyte]=0x00;
+
+    #ifdef DEBUG
+    /*debug message*/
+    printf("Writing in File 0x%02x\n",FID);
+    #endif
+
+    /*send the data to the card, the expected status word is 0x91 0x00*/
+    if(sendRequest(abtTx, abtTx_size, abtRx, 0x9100, 0) != 0) {return -1;}
+
     return 0;
+
 }
 
 
